@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# nocturne — manage an installed Nocturne theme.
+set -euo pipefail
+PREFIX="${NOCTURNE_PREFIX:-$HOME/.local/share/nocturne}"
+export NOCTURNE_STATE="${NOCTURNE_STATE:-$HOME/.local/state/nocturne}"
+
+usage() {
+  cat <<EOF
+usage: nocturne <command>
+
+  rebuild            regenerate every theme file from src/palette.py and re-apply colours
+  layout             rebuild the top bars, docks and desktop widgets (replaces your panels)
+  wallpaper <image>  use another wallpaper (frosted lock/login/splash backgrounds follow)
+  sddm               (re)install the login screen theme (asks for sudo)
+  edit               open the palette in \$EDITOR, then rebuild
+  uninstall          remove Nocturne and restore your previous settings
+EOF
+}
+
+live() { [[ ${XDG_CURRENT_DESKTOP-} == *KDE* ]] && command -v plasma-apply-colorscheme >/dev/null; }
+
+apply_colors() {
+  live || return 0
+  plasma-apply-colorscheme BreezeDark >/dev/null 2>&1 || true
+  plasma-apply-colorscheme Nocturne >/dev/null 2>&1 || true
+  local wp; wp=$(cat "$HOME/.config/nocturne/wallpaper" 2>/dev/null || echo "$HOME/.local/share/wallpapers/Nocturne/nocturne.jpg")
+  [[ -f $wp ]] && plasma-apply-wallpaperimage "$wp" >/dev/null 2>&1 || true
+  (qdbus6 org.kde.KWin /KWin reconfigure || qdbus org.kde.KWin /KWin reconfigure) >/dev/null 2>&1 || true
+}
+
+case "${1-}" in
+  rebuild)   python3 "$PREFIX/src/build.py" && apply_colors ;;
+  layout)    bash "$PREFIX/src/apply-layout.sh" ;;
+  wallpaper)
+    img=$(readlink -f "${2:?usage: nocturne wallpaper <image>}")
+    [[ -f $img ]] || { echo "no such file: $img" >&2; exit 1; }
+    dest="$HOME/.local/share/wallpapers/Nocturne/custom.${img##*.}"
+    mkdir -p "${dest%/*}" "$HOME/.config/nocturne"
+    cp -f "$img" "$dest"
+    echo "$dest" > "$HOME/.config/nocturne/wallpaper"
+    python3 "$PREFIX/src/build.py" >/dev/null && apply_colors
+    echo "wallpaper set — run 'nocturne sddm' to update the login screen too" ;;
+  sddm)      sudo bash "$PREFIX/src/install-sddm.sh" "$PREFIX/sddm-theme/nocturne" \
+               && mkdir -p "$NOCTURNE_STATE" && touch "$NOCTURNE_STATE/sddm-installed" ;;
+  edit)      "${EDITOR:-nano}" "$PREFIX/src/palette.py" && python3 "$PREFIX/src/build.py" && apply_colors ;;
+  uninstall) bash "$PREFIX/uninstall.sh" ;;
+  -h|--help|help|"") usage ;;
+  *) echo "unknown command: $1" >&2; usage; exit 1 ;;
+esac
